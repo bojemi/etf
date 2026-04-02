@@ -66,6 +66,8 @@ export default function BacktestDashboard() {
   const [selectedYear, setSelectedYear] = useState<string | null>(null);
   const [showInstructions, setShowInstructions] = useState(false);
   const [initialCapital, setInitialCapital] = useState("1000000");
+  const [hoveredTrade, setHoveredTrade] = useState<any>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
   const fetchData = async (isBackground = false) => {
     if (isBackground) {
@@ -612,7 +614,18 @@ export default function BacktestDashboard() {
                     );
                   }
                   return (
-                    <tr key={idx} className="hover:bg-neutral-800/30 transition-colors">
+                    <tr 
+                      key={idx} 
+                      className="hover:bg-neutral-800/30 transition-colors"
+                      onMouseEnter={(e) => {
+                        setHoveredTrade(trade);
+                        setMousePos({ x: e.clientX, y: e.clientY });
+                      }}
+                      onMouseMove={(e) => {
+                        setMousePos({ x: e.clientX, y: e.clientY });
+                      }}
+                      onMouseLeave={() => setHoveredTrade(null)}
+                    >
                       <td className="px-4 py-3 font-mono text-neutral-300">{trade.date}</td>
                       <td className="px-4 py-3">
                         <span className={cn(
@@ -658,6 +671,69 @@ export default function BacktestDashboard() {
         </div>
 
       </div>
+
+      {hoveredTrade && hoveredTrade.dailyStats && (
+        <div 
+          className="fixed z-50 bg-neutral-900 border border-neutral-700 p-4 rounded-xl shadow-2xl text-xs pointer-events-none w-[600px]"
+          style={{ 
+            top: Math.min(mousePos.y + 15, typeof window !== 'undefined' ? window.innerHeight - 300 : 0),
+            left: Math.min(mousePos.x + 15, typeof window !== 'undefined' ? window.innerWidth - 620 : 0)
+          }}
+        >
+          <h4 className="text-neutral-200 font-semibold mb-2 border-b border-neutral-800 pb-2">
+            {hoveredTrade.date} 当日全市场指标快照
+          </h4>
+          <table className="w-full text-left">
+            <thead className="text-neutral-500">
+              <tr>
+                <th className="pb-2">排名</th>
+                <th className="pb-2">标的</th>
+                <th className="pb-2 text-right">均线动量</th>
+                <th className="pb-2 text-right">开仓涨幅</th>
+                <th className="pb-2 text-right">现价/15日高</th>
+                <th className="pb-2 text-right">单日涨幅</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-800/50">
+              {hoveredTrade.dailyStats.map((stat: any, i: number) => {
+                const currentVsMax15 = stat.close / stat.max15 - 1;
+                const takeProfitCond = stat.close / stat.prevClose - 1;
+                const isTarget = stat.name === hoveredTrade.name;
+                return (
+                  <tr key={stat.name} className={isTarget ? "bg-blue-500/10" : ""}>
+                    <td className="py-1.5 text-neutral-400">{i + 1}</td>
+                    <td className="py-1.5 font-medium text-neutral-300">
+                      {stat.name}
+                      {!stat.isTraded && <span className="text-[10px] text-neutral-500 ml-1">(不交易)</span>}
+                    </td>
+                    <td className="py-1.5 text-right font-mono">
+                      <span className={stat.momentum > 0 ? "text-emerald-400" : "text-red-400"}>
+                        {stat.momentum > 0 ? '+' : ''}{(stat.momentum * 100).toFixed(2)}%
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-right font-mono">
+                      <span className={stat.openRebound > 0 ? "text-emerald-400" : "text-red-400"}>
+                        {stat.openRebound > 0 ? '+' : ''}{(stat.openRebound * 100).toFixed(2)}%
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-right font-mono">
+                      <span className={currentVsMax15 > 0 ? "text-emerald-400" : "text-red-400"}>
+                        {currentVsMax15 > 0 ? '+' : ''}{(currentVsMax15 * 100).toFixed(2)}%
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-right font-mono">
+                      <span className={takeProfitCond > 0 ? "text-emerald-400" : "text-red-400"}>
+                        {takeProfitCond > 0 ? '+' : ''}{(takeProfitCond * 100).toFixed(2)}%
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
     </div>
   );
 }

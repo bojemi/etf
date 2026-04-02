@@ -191,7 +191,8 @@ export async function runBacktest(initialCapital: number) {
               reason, 
               profit: profitPct,
               profitAmount: profitAmount,
-              capitalAfter: capital
+              capitalAfter: capital,
+              dailyStats: [...dailyStats]
             };
             trades.push(tradeObj);
             dailyTrades.push(tradeObj);
@@ -221,7 +222,8 @@ export async function runBacktest(initialCapital: number) {
             name: bestToBuy.name, 
             price: bestToBuy.close, 
             reason: `动量最高且开仓涨幅: ${(bestToBuy.openRebound * 100).toFixed(2)}%`,
-            capitalAfter: capital
+            capitalAfter: capital,
+            dailyStats: [...dailyStats]
           };
           trades.push(tradeObj);
           dailyTrades.push(tradeObj);
