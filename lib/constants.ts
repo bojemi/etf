@@ -8,5 +8,6 @@ export const defaultEtfs = [
   { name: '上证指数', code: '510210', calcSecid: '1.000001', tradeSecid: '1.510210', traded: false },
   { name: '科创100', code: '588220', calcSecid: '1.000698', tradeSecid: '1.588220', traded: true },
   { name: '中证A100', code: '512910', calcSecid: '1.000903', tradeSecid: '1.512910', traded: false },
-  { name: '豆粕', code: '159985', calcSecid: '0.159985', tradeSecid: '0.159985', traded: true }
+  { name: '豆粕', code: '159985', calcSecid: '0.159985', tradeSecid: '0.159985', traded: true },
+  { name: 'A500ETF', code: '512050', calcSecid: '1.000510', tradeSecid: '1.512050', traded: true }
 ];
