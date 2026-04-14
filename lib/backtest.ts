@@ -1,62 +1,231 @@
-export const targetEtfs = [
-  { name: '创成长', code: '159967', secid: '0.399296', traded: true },
-  { name: '黄金ETF', code: '518880', secid: '1.518880', traded: true },
-  { name: '中证1000', code: '512100', secid: '1.000852', traded: true },
-  { name: '恒生ETF', code: '159920', secid: '0.159920', traded: true },
-  { name: '纳指ETF', code: '513100', secid: '1.513100', traded: true },
-  { name: '科创100', code: '588220', secid: '1.000698', traded: true },
-  { name: '上证指数', code: '510210', secid: '1.000001', traded: false },
-  { name: '中证A100', code: '512910', secid: '1.000903', traded: false },
-  { name: '国证2000', code: '159628', secid: '0.399303', traded: false }
-];
+'use server';
 
-export async function runBacktest(initialCapital: number) {
-  const rawData: any = {};
-  
-  const getBeijingTime = () => {
-    const d = new Date();
-    const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
-    return new Date(utc + (3600000 * 8));
-  };
+import { defaultEtfs } from './constants';
+import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
+
+const fetchWithRetry = async (url: string, retries = 5, delayMs = 1000) => {
+  let currentDelay = delayMs;
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await axios.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*',
+          'Connection': 'keep-alive'
+        },
+        timeout: 10000
+      });
+      return res.data;
+    } catch (err: any) {
+      if (i === retries - 1) throw err;
+      console.warn(`Fetch failed (attempt ${i + 1}/${retries}) for ${url}. Error: ${err.message}. Retrying in ${currentDelay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, currentDelay));
+      currentDelay *= 2;
+    }
+  }
+};
+
+const getBeijingTime = () => {
+  const d = new Date();
+  const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+  return new Date(utc + (3600000 * 8));
+};
+
+const getTencentCode = (eastmoneySecid: string) => {
+  const parts = eastmoneySecid.split('.');
+  if (parts.length !== 2) return eastmoneySecid;
+  const prefix = parts[0] === '0' ? 'sz' : 'sh';
+  return prefix + parts[1];
+};
+
+const CACHE_DIR = path.join(process.cwd(), 'data');
+const CACHE_FILE = path.join(CACHE_DIR, 'etf_cache.json');
+const START_DATE = '2020-02-28';
+
+function getCache() {
+  if (!fs.existsSync(CACHE_DIR)) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+  }
+  if (fs.existsSync(CACHE_FILE)) {
+    try {
+      return JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
+    } catch (e) {
+      console.error("Failed to parse cache file", e);
+    }
+  }
+  return {};
+}
+
+function saveCache(cache: any) {
+  if (!fs.existsSync(CACHE_DIR)) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+  }
+  fs.writeFileSync(CACHE_FILE, JSON.stringify(cache));
+}
+
+export async function syncEtfData(etf: any) {
+  const cache = getCache();
+  let cacheUpdated = false;
   const bjTime = getBeijingTime();
   const todayStr = bjTime.toISOString().split('T')[0];
 
-  const lmt = 2000; 
-  
-  await Promise.all(targetEtfs.map(async (etf) => {
-    try {
-      const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${etf.secid}&fields1=f1&fields2=f51,f52,f53,f54,f55&klt=101&fqt=1&end=20500101&lmt=${lmt}`;
-      const res = await fetch(url, { cache: 'no-store' });
-      const json = await res.json();
-      if (json.data && json.data.klines) {
-        const fetchedData = json.data.klines.map((k: string) => {
-          const parts = k.split(',');
-          return {
-            date: parts[0],
-            open: parseFloat(parts[1]),
-            close: parseFloat(parts[2]),
-            high: parseFloat(parts[3]),
-            low: parseFloat(parts[4])
-          };
-        });
-        rawData[etf.name] = { code: etf.code, secid: etf.secid, data: fetchedData };
-      }
-    } catch (err) {
-      console.error(`Failed to fetch data for ${etf.name}:`, err);
+  const fetchAndMerge = async (tencentCode: string) => {
+    let cachedData = cache[tencentCode] || [];
+    let fetchStartDate = START_DATE;
+    
+    if (cachedData.length > 0) {
+      const lastDate = cachedData[cachedData.length - 1][0];
+      if (lastDate >= todayStr) return; // Already up to date
+      fetchStartDate = lastDate;
     }
-  }));
+
+    const url = `http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${tencentCode},day,${fetchStartDate},${todayStr},2000,qfq`;
+    const json = await fetchWithRetry(url);
+    
+    let newData: any[] = [];
+    if (json && json.data && json.data[tencentCode]) {
+      newData = json.data[tencentCode].qfqday || json.data[tencentCode].day || [];
+    }
+
+    if (newData.length > 0) {
+      const newDataMap = new Map(newData.map((k: any) => [k[0], k]));
+      const mergedData = [];
+      for (const k of cachedData) {
+        if (!newDataMap.has(k[0])) {
+          mergedData.push(k);
+        }
+      }
+      for (const k of newData) {
+        mergedData.push(k);
+      }
+      mergedData.sort((a, b) => a[0].localeCompare(b[0]));
+      
+      cache[tencentCode] = mergedData;
+      cacheUpdated = true;
+    } else if (cachedData.length === 0) {
+      throw new Error(`无法获取代码 ${tencentCode} 的数据，请检查代码是否正确（注意：0代表深交所，1代表上交所）。`);
+    }
+  };
+
+  try {
+    const calcTencentCode = getTencentCode(etf.calcSecid);
+    await fetchAndMerge(calcTencentCode);
+    
+    if (etf.calcSecid !== etf.tradeSecid) {
+      const tradeTencentCode = getTencentCode(etf.tradeSecid);
+      await fetchAndMerge(tradeTencentCode);
+    }
+
+    if (cacheUpdated) {
+      saveCache(cache);
+    }
+    return { success: true };
+  } catch (err: any) {
+    console.error(`Failed to sync data for ${etf.name}:`, err);
+    return { success: false, error: err.message };
+  }
+}
+
+export async function getCacheInfo(etfs: any[]) {
+  const cache = getCache();
+  const info: any[] = [];
+  
+  for (const [code, data] of Object.entries(cache)) {
+    const records = data as any[];
+    if (records.length > 0) {
+      let description = "未知数据";
+      let relatedName = "";
+      let type = "";
+
+      for (const etf of etfs) {
+        const calcCode = getTencentCode(etf.calcSecid);
+        const tradeCode = getTencentCode(etf.tradeSecid);
+
+        if (code === calcCode && code === tradeCode) {
+          relatedName = etf.name;
+          type = "指数与交易同标的";
+          break;
+        } else if (code === calcCode) {
+          relatedName = etf.name;
+          type = "计算指数";
+          break;
+        } else if (code === tradeCode) {
+          relatedName = etf.name;
+          type = "交易ETF";
+          break;
+        }
+      }
+
+      if (relatedName) {
+        description = `${relatedName} (${type})`;
+      } else {
+        description = `未知 (${code})`;
+      }
+
+      info.push({
+        code,
+        description,
+        startDate: records[0][0],
+        endDate: records[records.length - 1][0],
+        count: records.length
+      });
+    }
+  }
+  
+  return info;
+}
+
+export async function runBacktest(initialCapital: number, customEtfs?: any[], takeProfitStrategy: '3day_high' | 'daily_surge' = '3day_high') {
+  const etfsToUse = customEtfs && customEtfs.length > 0 ? customEtfs : defaultEtfs;
+  const rawData: any = {};
+  const cache = getCache();
+  
+  const bjTime = getBeijingTime();
+  const todayStr = bjTime.toISOString().split('T')[0];
+  const END_DATE = todayStr;
+
+  for (const etf of etfsToUse) {
+    const calcTencentCode = getTencentCode(etf.calcSecid);
+    const calcRawData = cache[calcTencentCode] || [];
+    
+    let calcData = calcRawData.map((k: any) => ({
+      date: k[0],
+      open: parseFloat(k[1]),
+      close: parseFloat(k[2]),
+      high: parseFloat(k[3]),
+      low: parseFloat(k[4])
+    }));
+
+    let tradeData = calcData;
+    if (etf.calcSecid !== etf.tradeSecid) {
+      const tradeTencentCode = getTencentCode(etf.tradeSecid);
+      const tradeRawData = cache[tradeTencentCode] || [];
+      
+      tradeData = tradeRawData.map((k: any) => ({
+        date: k[0],
+        open: parseFloat(k[1]),
+        close: parseFloat(k[2]),
+        high: parseFloat(k[3]),
+        low: parseFloat(k[4])
+      }));
+    }
+
+    if (calcData.length > 0 && tradeData.length > 0) {
+      rawData[etf.name] = { code: etf.code, calcData, tradeData };
+    }
+  }
 
   const etfNames = Object.keys(rawData);
   if (etfNames.length === 0) {
-    throw new Error("Failed to fetch any ETF data. Please check your network connection.");
+    throw new Error("Failed to fetch any ETF data. Please check your network connection or sync data first.");
   }
 
-  const START_DATE = '2020-02-28';
-  const END_DATE = todayStr;
   let allDatesSet = new Set<string>();
 
   etfNames.forEach(name => {
-    rawData[name].data.forEach((k: any) => {
+    rawData[name].calcData.forEach((k: any) => {
       if (k.date >= START_DATE && k.date <= END_DATE) {
         allDatesSet.add(k.date);
       }
@@ -71,19 +240,19 @@ export async function runBacktest(initialCapital: number) {
     return sum / period;
   };
 
-  const calcMin = (data: any[], index: number, period: number) => {
-    if (index < period - 1) return null;
+  const calcMinExcludeToday = (data: any[], index: number, period: number) => {
+    if (index < period) return null;
     let min = Infinity;
-    for (let i = 0; i < period; i++) {
+    for (let i = 1; i <= period; i++) {
       if (data[index - i].close < min) min = data[index - i].close;
     }
     return min;
   };
 
-  const calcMax = (data: any[], index: number, period: number, field: string = 'close') => {
-    if (index < period - 1) return null;
+  const calcMaxExcludeToday = (data: any[], index: number, period: number, field: string = 'close') => {
+    if (index < period) return null;
     let max = -Infinity;
-    for (let i = 0; i < period; i++) {
+    for (let i = 1; i <= period; i++) {
       if (data[index - i][field] > max) max = data[index - i][field];
     }
     return max;
@@ -99,46 +268,52 @@ export async function runBacktest(initialCapital: number) {
     let dailyStats: any[] = [];
 
     for (const name of etfNames) {
-      const etfData = rawData[name].data;
-      const index = etfData.findIndex((d: any) => d.date === today);
-      if (index === -1) continue;
+      const calcEtfData = rawData[name].calcData;
+      const tradeEtfData = rawData[name].tradeData;
+      const calcIndex = calcEtfData.findIndex((d: any) => d.date === today);
+      const tradeIndex = tradeEtfData.findIndex((d: any) => d.date === today);
+      if (calcIndex === -1 || tradeIndex === -1) {
+        if (today === allDates[allDates.length - 1]) {
+          console.log(`Skipping ${name} on ${today} due to missing data: calcIndex=${calcIndex}, tradeIndex=${tradeIndex}`);
+        }
+        continue;
+      }
 
-      const close = etfData[index].close;
-      const open = etfData[index].open;
-      const high = etfData[index].high;
-      const low = etfData[index].low;
-      const prevClose = index > 0 ? etfData[index - 1].close : close;
+      const calcClose = calcEtfData[calcIndex].close;
+      const tradeClose = tradeEtfData[tradeIndex].close;
       
-      const ma3 = calcMA(etfData, index, 3);
-      const ma28 = calcMA(etfData, index, 28);
-      const min60 = calcMin(etfData, index, 60);
-      const max15 = calcMax(etfData, index, 15, 'close');
+      const ma3 = calcMA(calcEtfData, calcIndex, 3);
+      const ma28 = calcMA(calcEtfData, calcIndex, 28);
+      const min30 = calcMinExcludeToday(calcEtfData, calcIndex, 30);
+      const max3 = calcMaxExcludeToday(calcEtfData, calcIndex, 3);
+      const max15 = calcMaxExcludeToday(calcEtfData, calcIndex, 15);
 
-      if (ma3 && ma28 && min60 && max15) {
+      if (ma3 && ma28 && min30 && max3 && max15) {
         dailyStats.push({
           name,
           code: rawData[name].code,
-          close,
-          open,
-          high,
-          low,
-          prevClose,
+          close: tradeClose,
+          calcClose: calcClose,
+          prevClose: tradeIndex > 0 ? tradeEtfData[tradeIndex - 1].close : tradeClose,
           momentum: ma3 / ma28 - 1,
-          openRebound: close / min60 - 1,
+          openRebound: calcClose / min30 - 1,
+          takeProfit: calcClose / max3 - 1,
           max15: max15,
-          isTraded: targetEtfs.find(e => e.name === name)?.traded || false
+          isTraded: etfsToUse.find((e: any) => e.name === name)?.traded || false
         });
+      } else {
+        console.log(`Skipping ${name} on ${today} due to missing indicators: ma3=${ma3}, ma28=${ma28}, min30=${min30}, max3=${max3}, max15=${max15}`);
       }
     }
 
     if (dailyStats.length === 0) {
       let currentEquity = capital;
       if (position) {
-        const etfData = rawData[position.name].data;
+        const tradeEtfData = rawData[position.name].tradeData;
         let lastClose = position.buy_price;
-        for (let i = etfData.length - 1; i >= 0; i--) {
-          if (etfData[i].date <= today) {
-            lastClose = etfData[i].close;
+        for (let i = tradeEtfData.length - 1; i >= 0; i--) {
+          if (tradeEtfData[i].date <= today) {
+            lastClose = tradeEtfData[i].close;
             break;
           }
         }
@@ -149,7 +324,11 @@ export async function runBacktest(initialCapital: number) {
     }
 
     dailyStats.sort((a, b) => b.momentum - a.momentum);
-    const topEtf = dailyStats[0];
+    
+    // 仅将参与交易的标的纳入轮动排序和计算
+    const tradedStats = dailyStats.filter(s => s.isTraded);
+    const topTradedEtf = tradedStats.length > 0 ? tradedStats[0] : null;
+
     let dailyTrades: any[] = [];
 
     // --- 卖出逻辑 ---
@@ -157,13 +336,20 @@ export async function runBacktest(initialCapital: number) {
     if (position) {
       const heldStats = dailyStats.find(s => s.name === position.name);
       if (heldStats) {
-        const isNotTop1 = topEtf.name !== position.name;
+        const isNotTop1 = topTradedEtf ? topTradedEtf.name !== position.name : false;
         
         const stopLossPrice = heldStats.max15 * (1 - 0.085);
-        const triggerStopLoss = heldStats.close < stopLossPrice;
+        const triggerStopLoss = heldStats.calcClose < stopLossPrice;
         
-        const takeProfitPrice = heldStats.prevClose * 1.05;
-        const triggerTakeProfit = heldStats.close > takeProfitPrice;
+        let triggerTakeProfit = false;
+        let takeProfitReason = '';
+        if (takeProfitStrategy === 'daily_surge') {
+          triggerTakeProfit = (heldStats.close / heldStats.prevClose - 1) > 0.05;
+          takeProfitReason = '触发止盈(当日收盘涨幅>5%)';
+        } else {
+          triggerTakeProfit = heldStats.takeProfit > 0.05;
+          takeProfitReason = '触发止盈(现价较近3日高点涨幅>5%)';
+        }
 
         if (isNotTop1 || triggerStopLoss || triggerTakeProfit) {
           if (position.buy_date !== today) { // T+1
@@ -173,7 +359,7 @@ export async function runBacktest(initialCapital: number) {
             if (triggerStopLoss) {
               reason = '触发止损(15日高点回撤<-8.5%)';
             } else if (triggerTakeProfit) {
-              reason = '触发止盈(单日涨幅>5%)';
+              reason = takeProfitReason;
             } else {
               reason = '排名非第1';
             }
@@ -204,9 +390,9 @@ export async function runBacktest(initialCapital: number) {
     }
 
     // --- 买入逻辑 ---
-    if (!position) {
-      const bestToBuy = topEtf;
-      if (bestToBuy.name !== soldToday && bestToBuy.isTraded) {
+    if (!position && topTradedEtf) {
+      const bestToBuy = topTradedEtf;
+      if (bestToBuy.name !== soldToday) {
         if (bestToBuy.openRebound > 0.015) {
           const shares = capital / bestToBuy.close;
           position = { 
@@ -237,11 +423,11 @@ export async function runBacktest(initialCapital: number) {
       if (heldStats) {
         currentEquity = position.shares * heldStats.close;
       } else {
-        const etfData = rawData[position.name].data;
+        const tradeEtfData = rawData[position.name].tradeData;
         let lastClose = position.buy_price;
-        for (let i = etfData.length - 1; i >= 0; i--) {
-          if (etfData[i].date <= today) {
-            lastClose = etfData[i].close;
+        for (let i = tradeEtfData.length - 1; i >= 0; i--) {
+          if (tradeEtfData[i].date <= today) {
+            lastClose = tradeEtfData[i].close;
             break;
           }
         }

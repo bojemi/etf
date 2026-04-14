@@ -2,11 +2,12 @@
 
 import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceArea } from 'recharts';
-import { ArrowUpRight, ArrowDownRight, Activity, DollarSign, Percent, TrendingUp, AlertTriangle, Calendar, RefreshCcw, Shield } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Activity, DollarSign, Percent, TrendingUp, AlertTriangle, Calendar, RefreshCcw, Shield, Settings, Plus, Trash2, X, Save, Edit2 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { runBacktest } from '@/lib/backtest';
+import { runBacktest, syncEtfData, getCacheInfo } from '@/lib/backtest';
+import { defaultEtfs } from '@/lib/constants';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -61,13 +62,21 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 export default function BacktestDashboard() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [syncProgress, setSyncProgress] = useState<{ current: number, total: number, name: string } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedYear, setSelectedYear] = useState<string | null>(null);
   const [showInstructions, setShowInstructions] = useState(false);
+  const [showCacheInfo, setShowCacheInfo] = useState(false);
+  const [cacheInfo, setCacheInfo] = useState<any[]>([]);
   const [initialCapital, setInitialCapital] = useState("1000000");
   const [hoveredTrade, setHoveredTrade] = useState<any>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [etfPool, setEtfPool] = useState<any[]>(defaultEtfs);
+  const [showEtfSettings, setShowEtfSettings] = useState(false);
+  const [editingEtfs, setEditingEtfs] = useState<any[]>([]);
+  const [takeProfitStrategy, setTakeProfitStrategy] = useState<'3day_high' | 'daily_surge'>('3day_high');
+  const [editingTakeProfitStrategy, setEditingTakeProfitStrategy] = useState<'3day_high' | 'daily_surge'>('3day_high');
 
   const fetchData = async (isBackground = false) => {
     if (isBackground) {
@@ -77,7 +86,18 @@ export default function BacktestDashboard() {
     }
     setError(null);
     try {
-      const result = await runBacktest(parseFloat(initialCapital));
+      // Sync data first
+      setSyncProgress({ current: 0, total: etfPool.length, name: '初始化...' });
+      for (let i = 0; i < etfPool.length; i++) {
+        setSyncProgress({ current: i + 1, total: etfPool.length, name: etfPool[i].name });
+        const res = await syncEtfData(etfPool[i]);
+        if (!res.success) {
+          throw new Error(res.error);
+        }
+      }
+      setSyncProgress(null);
+
+      const result = await runBacktest(parseFloat(initialCapital), etfPool, takeProfitStrategy);
       setData(result);
     } catch (err: any) {
       setError(err.message);
@@ -90,16 +110,40 @@ export default function BacktestDashboard() {
     }
   };
 
+  const loadCacheInfo = async () => {
+    const info = await getCacheInfo(etfPool);
+    setCacheInfo(info);
+  };
+
   useEffect(() => {
     fetchData(false);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [etfPool, takeProfitStrategy]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (loading) {
+  if (loading || syncProgress) {
     return (
       <div className="min-h-screen bg-neutral-950 text-neutral-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <Activity className="w-8 h-8 animate-pulse text-emerald-500" />
-          <p className="text-neutral-400 font-mono text-sm">QUANT-ARCHITECT-OS: RUNNING BACKTEST ENGINE...</p>
+        <div className="flex flex-col items-center gap-6 max-w-md w-full px-6">
+          <Activity className="w-10 h-10 animate-pulse text-emerald-500" />
+          
+          {syncProgress ? (
+            <div className="w-full space-y-3">
+              <div className="flex justify-between text-xs font-mono text-neutral-400">
+                <span>SYNCING DATA: {syncProgress.name}</span>
+                <span>{syncProgress.current} / {syncProgress.total}</span>
+              </div>
+              <div className="h-2 w-full bg-neutral-900 rounded-full overflow-hidden border border-neutral-800">
+                <div 
+                  className="h-full bg-emerald-500 transition-all duration-300 ease-out"
+                  style={{ width: `${(syncProgress.current / syncProgress.total) * 100}%` }}
+                />
+              </div>
+              <p className="text-center text-xs text-neutral-500 mt-2">
+                正在从云端同步历史 K 线数据，首次运行可能需要几秒钟...
+              </p>
+            </div>
+          ) : (
+            <p className="text-neutral-400 font-mono text-sm">QUANT-ARCHITECT-OS: RUNNING BACKTEST ENGINE...</p>
+          )}
         </div>
       </div>
     );
@@ -111,7 +155,17 @@ export default function BacktestDashboard() {
         <div className="bg-red-500/10 border border-red-500/20 p-6 rounded-lg max-w-md text-center">
           <AlertTriangle className="w-8 h-8 text-red-500 mx-auto mb-4" />
           <h2 className="text-lg font-semibold text-red-400 mb-2">Engine Failure</h2>
-          <p className="text-neutral-400 text-sm">{error}</p>
+          <p className="text-neutral-400 text-sm mb-6">{error}</p>
+          <button 
+            onClick={() => {
+              setError(null);
+              setEditingEtfs([...etfPool]);
+              setShowEtfSettings(true);
+            }}
+            className="px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-neutral-300 rounded-lg border border-neutral-800 transition-colors text-sm font-medium"
+          >
+            返回修改标的池
+          </button>
         </div>
       </div>
     );
@@ -163,8 +217,8 @@ export default function BacktestDashboard() {
     if (currentPosition) {
       const heldStat = data.latestStats.find((s: any) => s.name === currentPosition);
       if (heldStat) {
-        const currentVsMax15 = heldStat.close / heldStat.max15 - 1;
-        const takeProfitCond = heldStat.close / heldStat.prevClose - 1;
+        const currentVsMax15 = heldStat.calcClose / heldStat.max15 - 1;
+        const takeProfitCond = heldStat.takeProfit;
         
         let triggerSell = false;
         let sellReason = "";
@@ -206,12 +260,52 @@ export default function BacktestDashboard() {
         
         {/* Header */}
         <header className="border-b border-neutral-800 pb-6">
-          <h1 className="text-3xl font-bold tracking-tight text-neutral-100 flex items-center gap-3">
-            <Activity className="w-8 h-8 text-emerald-500" />
-            ETF 均线动量轮动策略
-          </h1>
-          <p className="text-neutral-400 mt-2 font-mono text-sm">
-            QUANT-ARCHITECT-OS v1.0 | BACKTEST PERIOD: 2020-02-28 TO today
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <h1 className="text-3xl font-bold tracking-tight text-neutral-100 flex items-center gap-3">
+              <Activity className="w-8 h-8 text-emerald-500" />
+              QUANT-ARCHITECT-OS
+            </h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => {
+                  loadCacheInfo();
+                  setShowCacheInfo(true);
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-neutral-300 rounded-lg border border-neutral-800 transition-colors text-sm font-medium"
+              >
+                <Calendar className="w-4 h-4" />
+                本地数据缓存
+              </button>
+              <button
+                onClick={() => setShowInstructions(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-neutral-300 rounded-lg border border-neutral-800 transition-colors text-sm font-medium"
+              >
+                <Shield className="w-4 h-4" />
+                策略说明
+              </button>
+              <button
+                onClick={() => {
+                  setEditingEtfs([...etfPool]);
+                  setEditingTakeProfitStrategy(takeProfitStrategy);
+                  setShowEtfSettings(true);
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-neutral-300 rounded-lg border border-neutral-800 transition-colors text-sm font-medium"
+              >
+                <Settings className="w-4 h-4" />
+                自定义标的池
+              </button>
+              <button
+                onClick={() => fetchData(true)}
+                disabled={isRefreshing}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors text-sm font-medium disabled:opacity-50"
+              >
+                <RefreshCcw className={cn("w-4 h-4", isRefreshing && "animate-spin")} />
+                {isRefreshing ? '同步中...' : '刷新最新数据'}
+              </button>
+            </div>
+          </div>
+          <p className="text-neutral-500 mt-2 font-mono text-sm">
+            ENGINE STATUS: <span className="text-emerald-500">ONLINE</span> | LAST SYNC: {nowStr} | BACKTEST PERIOD: 2020-02-28 TO today
           </p>
         </header>
 
@@ -290,6 +384,16 @@ export default function BacktestDashboard() {
                   数据更新时间: {nowStr}, 14:30调仓计划: <span className="text-blue-400 font-bold">{plan}</span>
                 </div>
                 <button 
+                  onClick={() => {
+                    setEditingEtfs(JSON.parse(JSON.stringify(etfPool)));
+                    setShowEtfSettings(true);
+                  }}
+                  className="bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-300 px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2"
+                >
+                  <Settings className="w-4 h-4" />
+                  自定义标的
+                </button>
+                <button 
                   onClick={() => fetchData(true)}
                   disabled={isRefreshing}
                   className="bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-300 px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
@@ -353,18 +457,18 @@ export default function BacktestDashboard() {
                     </div>
                     <div className="space-y-1">
                       <p><strong className="text-emerald-400">2. 开仓涨幅</strong></p>
-                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / 过去60个交易日的最低收盘价 - 1</p>
-                      <p className="text-xs text-neutral-400">寻找过去 60 天（包含 T 日）的最低价。只有当开仓涨幅 &gt; 1.5% 时，才允许开仓买入，用于过滤掉长期阴跌的标的。</p>
+                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / 过去30个交易日的最低收盘价 - 1</p>
+                      <p className="text-xs text-neutral-400">寻找过去 30 天（不包含 T 日）的最低价。只有当开仓涨幅 &gt; 1.5% 时，才允许开仓买入，用于过滤掉长期阴跌的标的。</p>
                     </div>
                     <div className="space-y-1">
                       <p><strong className="text-emerald-400">3. 止损条件</strong></p>
                       <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / 过去15个交易日的最高收盘价 - 1 &lt; -8.5%</p>
-                      <p className="text-xs text-neutral-400">寻找过去 15 天（包含 T 日）的最高价。如果现价距离近 15 日高点回撤超过 8.5%，则无条件止损卖出。</p>
+                      <p className="text-xs text-neutral-400">寻找过去 15 天（不包含 T 日）的最高价。如果现价距离近 15 日高点回撤超过 8.5%，则无条件止损卖出。</p>
                     </div>
                     <div className="space-y-1">
                       <p><strong className="text-emerald-400">4. 止盈条件</strong></p>
-                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / T-1日收盘价 - 1 &gt; 5%</p>
-                      <p className="text-xs text-neutral-400">如果单日涨幅超过 5%，说明情绪高潮，直接止盈卖出。</p>
+                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / 过去3个交易日的最高收盘价 - 1 &gt; 5%</p>
+                      <p className="text-xs text-neutral-400">寻找过去 3 天（不包含 T 日）的最高价。如果现价突破近 3 日高点超过 5%，说明情绪高潮，直接止盈卖出。</p>
                     </div>
                   </div>
                 </div>
@@ -380,16 +484,16 @@ export default function BacktestDashboard() {
                     <th className="px-4 py-3 font-medium">代码</th>
                     <th className="px-4 py-3 font-medium text-right">均线动量涨幅</th>
                     <th className="px-4 py-3 font-medium text-right">开仓涨幅</th>
-                    <th className="px-4 py-3 font-medium text-right">现价</th>
-                    <th className="px-4 py-3 font-medium text-right">近15日高点</th>
-                    <th className="px-4 py-3 font-medium text-right">现价vs近15日高点涨幅</th>
+                    <th className="px-4 py-3 font-medium text-right">现价(指数)</th>
+                    <th className="px-4 py-3 font-medium text-right">近15日高点(指数)</th>
+                    <th className="px-4 py-3 font-medium text-right">现价VS高点涨幅</th>
                     <th className="px-4 py-3 font-medium text-right">止盈条件</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-800/50">
                   {data.latestStats.map((stat: any, idx: number) => {
-                    const currentVsMax15 = stat.close / stat.max15 - 1;
-                    const takeProfitCond = stat.close / stat.prevClose - 1;
+                    const currentVsMax15 = stat.calcClose / stat.max15 - 1;
+                    const takeProfitCond = stat.takeProfit;
                     return (
                       <tr key={stat.name} className="hover:bg-neutral-800/30 transition-colors">
                         <td className="px-4 py-3 font-mono text-neutral-400">{idx + 1}</td>
@@ -408,7 +512,7 @@ export default function BacktestDashboard() {
                             {stat.openRebound > 0 ? '+' : ''}{formatPercent(stat.openRebound * 100)}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right font-mono text-neutral-300">{stat.close.toFixed(3)}</td>
+                        <td className="px-4 py-3 text-right font-mono text-neutral-300">{stat.calcClose.toFixed(3)}</td>
                         <td className="px-4 py-3 text-right font-mono text-neutral-400">{stat.max15.toFixed(3)}</td>
                         <td className="px-4 py-3 text-right font-mono">
                           <span className={currentVsMax15 > 0 ? "text-emerald-400" : "text-red-400"}>
@@ -696,8 +800,8 @@ export default function BacktestDashboard() {
             </thead>
             <tbody className="divide-y divide-neutral-800/50">
               {hoveredTrade.dailyStats.map((stat: any, i: number) => {
-                const currentVsMax15 = stat.close / stat.max15 - 1;
-                const takeProfitCond = stat.close / stat.prevClose - 1;
+                const currentVsMax15 = stat.calcClose / stat.max15 - 1;
+                const takeProfitCond = stat.takeProfit;
                 const isTarget = stat.name === hoveredTrade.name;
                 return (
                   <tr key={stat.name} className={isTarget ? "bg-blue-500/10" : ""}>
@@ -731,6 +835,241 @@ export default function BacktestDashboard() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ETF Settings Modal */}
+      {showEtfSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-6 border-b border-neutral-800">
+              <h3 className="text-xl font-semibold text-neutral-100 flex items-center gap-2">
+                <Settings className="w-5 h-5 text-blue-500" />
+                自定义标的池
+              </h3>
+              <button 
+                onClick={() => setShowEtfSettings(false)}
+                className="text-neutral-400 hover:text-neutral-200 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+              <div className="mb-6 bg-neutral-950/50 border border-neutral-800/50 rounded-lg p-4">
+                <h4 className="text-sm font-medium text-neutral-300 mb-3 flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-blue-400" />
+                  全局策略设置
+                </h4>
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs text-neutral-500">止盈条件选择</label>
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <label className="flex items-center gap-2 text-sm text-neutral-300 cursor-pointer">
+                      <input 
+                        type="radio" 
+                        name="takeProfit"
+                        value="3day_high"
+                        checked={editingTakeProfitStrategy === '3day_high'}
+                        onChange={() => setEditingTakeProfitStrategy('3day_high')}
+                        className="text-blue-500 focus:ring-blue-500 bg-neutral-900 border-neutral-700"
+                      />
+                      现价较近3日高点涨幅 &gt; 5% (原策略)
+                    </label>
+                    <label className="flex items-center gap-2 text-sm text-neutral-300 cursor-pointer">
+                      <input 
+                        type="radio" 
+                        name="takeProfit"
+                        value="daily_surge"
+                        checked={editingTakeProfitStrategy === 'daily_surge'}
+                        onChange={() => setEditingTakeProfitStrategy('daily_surge')}
+                        className="text-blue-500 focus:ring-blue-500 bg-neutral-900 border-neutral-700"
+                      />
+                      当日收盘涨幅 &gt; 5% (新策略)
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {editingEtfs.map((etf, idx) => (
+                  <div key={idx} className="flex flex-col md:flex-row gap-3 items-start md:items-center bg-neutral-950/50 p-4 rounded-lg border border-neutral-800/50">
+                    <div className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-3 w-full">
+                      <div>
+                        <label className="block text-xs text-neutral-500 mb-1">名称</label>
+                        <input 
+                          type="text" 
+                          value={etf.name}
+                          onChange={(e) => {
+                            const newEtfs = [...editingEtfs];
+                            newEtfs[idx].name = e.target.value;
+                            setEditingEtfs(newEtfs);
+                          }}
+                          className="w-full bg-neutral-900 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200 focus:border-blue-500 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-neutral-500 mb-1">展示代码</label>
+                        <input 
+                          type="text" 
+                          value={etf.code}
+                          onChange={(e) => {
+                            const newEtfs = [...editingEtfs];
+                            newEtfs[idx].code = e.target.value;
+                            setEditingEtfs(newEtfs);
+                          }}
+                          className="w-full bg-neutral-900 border border-neutral-700 rounded px-3 py-1.5 text-sm font-mono text-neutral-200 focus:border-blue-500 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-neutral-500 mb-1">计算代码 (指数/本身)</label>
+                        <input 
+                          type="text" 
+                          value={etf.calcSecid}
+                          onChange={(e) => {
+                            const newEtfs = [...editingEtfs];
+                            newEtfs[idx].calcSecid = e.target.value;
+                            setEditingEtfs(newEtfs);
+                          }}
+                          className="w-full bg-neutral-900 border border-neutral-700 rounded px-3 py-1.5 text-sm font-mono text-neutral-200 focus:border-blue-500 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-neutral-500 mb-1">交易代码 (ETF)</label>
+                        <input 
+                          type="text" 
+                          value={etf.tradeSecid}
+                          onChange={(e) => {
+                            const newEtfs = [...editingEtfs];
+                            newEtfs[idx].tradeSecid = e.target.value;
+                            setEditingEtfs(newEtfs);
+                          }}
+                          className="w-full bg-neutral-900 border border-neutral-700 rounded px-3 py-1.5 text-sm font-mono text-neutral-200 focus:border-blue-500 outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 mt-2 md:mt-0">
+                      <label className="flex items-center gap-2 text-sm text-neutral-300 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={etf.traded}
+                          onChange={(e) => {
+                            const newEtfs = [...editingEtfs];
+                            newEtfs[idx].traded = e.target.checked;
+                            setEditingEtfs(newEtfs);
+                          }}
+                          className="rounded border-neutral-700 bg-neutral-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-neutral-900"
+                        />
+                        参与交易
+                      </label>
+                      <button 
+                        onClick={() => {
+                          const newEtfs = [...editingEtfs];
+                          newEtfs.splice(idx, 1);
+                          setEditingEtfs(newEtfs);
+                        }}
+                        className="p-2 text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded transition-colors"
+                        title="删除标的"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                
+                <button 
+                  onClick={() => {
+                    setEditingEtfs([...editingEtfs, { name: '新标的', code: '000000', calcSecid: '1.000000', tradeSecid: '1.000000', traded: true }]);
+                  }}
+                  className="w-full py-3 border-2 border-dashed border-neutral-700 hover:border-neutral-500 text-neutral-400 hover:text-neutral-300 rounded-lg flex items-center justify-center gap-2 transition-colors text-sm font-medium"
+                >
+                  <Plus className="w-4 h-4" />
+                  添加新标的
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6 border-t border-neutral-800 flex justify-end gap-3 bg-neutral-900/50">
+              <button 
+                onClick={() => setShowEtfSettings(false)}
+                className="px-4 py-2 rounded-md text-sm font-medium text-neutral-300 hover:text-white hover:bg-neutral-800 transition-colors"
+              >
+                取消
+              </button>
+              <button 
+                onClick={() => {
+                  setEtfPool(editingEtfs);
+                  setTakeProfitStrategy(editingTakeProfitStrategy);
+                  setShowEtfSettings(false);
+                }}
+                className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                <Save className="w-4 h-4" />
+                保存并重新回测
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cache Info Modal */}
+      {showCacheInfo && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-neutral-950 border border-neutral-800 rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="p-6 border-b border-neutral-800 flex justify-between items-center bg-neutral-900/50">
+              <h2 className="text-xl font-bold text-neutral-100 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-blue-400" />
+                本地数据缓存状态
+              </h2>
+              <button 
+                onClick={() => setShowCacheInfo(false)}
+                className="text-neutral-400 hover:text-white transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+              {cacheInfo.length === 0 ? (
+                <div className="text-center text-neutral-500 py-8">
+                  暂无本地缓存数据，请运行回测或刷新数据。
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-left text-neutral-400">
+                    <thead className="text-xs text-neutral-500 uppercase bg-neutral-900/50">
+                      <tr>
+                        <th className="px-4 py-3 rounded-tl-lg">标的说明</th>
+                        <th className="px-4 py-3">代码</th>
+                        <th className="px-4 py-3">起始日期</th>
+                        <th className="px-4 py-3">最新日期</th>
+                        <th className="px-4 py-3 rounded-tr-lg">数据条数</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cacheInfo.map((info, idx) => (
+                        <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-900/30 transition-colors">
+                          <td className="px-4 py-3 font-medium text-neutral-200">{info.description}</td>
+                          <td className="px-4 py-3 font-mono text-neutral-400">{info.code}</td>
+                          <td className="px-4 py-3 font-mono">{info.startDate}</td>
+                          <td className="px-4 py-3 font-mono text-emerald-400">{info.endDate}</td>
+                          <td className="px-4 py-3 font-mono">{info.count}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            
+            <div className="p-6 border-t border-neutral-800 flex justify-end bg-neutral-900/50">
+              <button 
+                onClick={() => setShowCacheInfo(false)}
+                className="px-6 py-2 bg-neutral-800 hover:bg-neutral-700 text-white rounded-md text-sm font-medium transition-colors"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

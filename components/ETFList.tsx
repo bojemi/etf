@@ -199,35 +199,52 @@ export default function ETFList() {
 
   const fetchETFData = async (market: number, code: string) => {
     try {
-      const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${market}.${code}&fields1=f1&fields2=f51,f53,f57&klt=101&fqt=1&end=20500101&lmt=2`;
-      const res = await fetch(url);
-      const json = await res.json();
-      const klines = json?.data?.klines;
-      if (klines && klines.length > 0) {
-        // Get today's date in Beijing time (UTC+8)
-        const today = new Date(new Date().getTime() + 8 * 60 * 60 * 1000).toISOString().split('T')[0];
-        
-        let targetKline = klines[klines.length - 1]; // Default to the latest
-        let latestKline = klines[klines.length - 1]; // Always use the latest for price
-        
-        if (klines.length === 2) {
-          const latestDate = klines[1].split(',')[0];
-          if (latestDate === today) {
-            // If the latest kline is today, we want the previous one (yesterday) for turnover
-            targetKline = klines[0];
-          } else {
-            // If the latest kline is NOT today (e.g., weekend/holiday), it is the last trading day
-            targetKline = klines[1];
-          }
+      // market: 0 is SZ, 1 is SH
+      const prefix = market === 0 ? 'sz' : 'sh';
+      const tencentCode = `${prefix}${code}`;
+      const url = `http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${tencentCode},day,,,2,qfq`;
+      
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*',
+          'Connection': 'keep-alive'
         }
-        
-        const turnoverParts = targetKline.split(",");
-        const latestParts = latestKline.split(",");
-        
-        return {
-          turnover: parseFloat(turnoverParts[2]) || 0,
-          price: parseFloat(latestParts[1]) || 0
-        };
+      });
+      const json = await res.json();
+      
+      if (json?.data && json.data[tencentCode]) {
+        const klines = json.data[tencentCode].qfqday || json.data[tencentCode].day;
+        if (klines && klines.length > 0) {
+          // Get today's date in Beijing time (UTC+8)
+          const today = new Date(new Date().getTime() + 8 * 60 * 60 * 1000).toISOString().split('T')[0];
+          
+          let targetKline = klines[klines.length - 1]; // Default to the latest
+          let latestKline = klines[klines.length - 1]; // Always use the latest for price
+          
+          if (klines.length === 2) {
+            const latestDate = klines[1][0];
+            if (latestDate === today) {
+              // If the latest kline is today, we want the previous one (yesterday) for turnover
+              targetKline = klines[0];
+            } else {
+              // If the latest kline is NOT today (e.g., weekend/holiday), it is the last trading day
+              targetKline = klines[1];
+            }
+          }
+          
+          const closePrice = parseFloat(latestKline[2]) || 0;
+          const targetClose = parseFloat(targetKline[2]) || 0;
+          const targetVolumeLots = parseFloat(targetKline[5]) || 0;
+          
+          // Approximate turnover: volume (lots) * 100 (shares/lot) * close price
+          const turnover = targetVolumeLots * 100 * targetClose;
+          
+          return {
+            turnover: turnover,
+            price: closePrice
+          };
+        }
       }
       return { turnover: 0, price: 0 };
     } catch (err) {
