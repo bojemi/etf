@@ -177,7 +177,34 @@ export async function getCacheInfo(etfs: any[]) {
   return info;
 }
 
-export async function runBacktest(initialCapital: number, customEtfs?: any[], takeProfitStrategy: '3day_high' | 'daily_surge' = '3day_high') {
+export interface BacktestParams {
+  maFast?: number;
+  maSlow?: number;
+  minPeriod?: number;
+  maxShort?: number;
+  maxLong?: number;
+  stopLossPct?: number;
+  takeProfitPct?: number;
+  reboundPct?: number;
+}
+
+export async function runBacktest(
+  initialCapital: number, 
+  customEtfs?: any[], 
+  takeProfitStrategy: '3day_high' | 'daily_surge' = '3day_high',
+  params?: BacktestParams
+) {
+  const p = {
+    maFast: params?.maFast || 3,
+    maSlow: params?.maSlow || 28,
+    minPeriod: params?.minPeriod || 30,
+    maxShort: params?.maxShort || 3,
+    maxLong: params?.maxLong || 15,
+    stopLossPct: params?.stopLossPct || 0.085,
+    takeProfitPct: params?.takeProfitPct || 0.05,
+    reboundPct: params?.reboundPct || 0.015
+  };
+
   const etfsToUse = customEtfs && customEtfs.length > 0 ? customEtfs : defaultEtfs;
   const rawData: any = {};
   const cache = getCache();
@@ -282,11 +309,11 @@ export async function runBacktest(initialCapital: number, customEtfs?: any[], ta
       const calcClose = calcEtfData[calcIndex].close;
       const tradeClose = tradeEtfData[tradeIndex].close;
       
-      const ma3 = calcMA(calcEtfData, calcIndex, 3);
-      const ma28 = calcMA(calcEtfData, calcIndex, 28);
-      const min30 = calcMinExcludeToday(calcEtfData, calcIndex, 30);
-      const max3 = calcMaxExcludeToday(calcEtfData, calcIndex, 3);
-      const max15 = calcMaxExcludeToday(calcEtfData, calcIndex, 15);
+      const ma3 = calcMA(calcEtfData, calcIndex, p.maFast);
+      const ma28 = calcMA(calcEtfData, calcIndex, p.maSlow);
+      const min30 = calcMinExcludeToday(calcEtfData, calcIndex, p.minPeriod);
+      const max3 = calcMaxExcludeToday(calcEtfData, calcIndex, p.maxShort);
+      const max15 = calcMaxExcludeToday(calcEtfData, calcIndex, p.maxLong);
 
       if (ma3 && ma28 && min30 && max3 && max15) {
         dailyStats.push({
@@ -338,17 +365,17 @@ export async function runBacktest(initialCapital: number, customEtfs?: any[], ta
       if (heldStats) {
         const isNotTop1 = topTradedEtf ? topTradedEtf.name !== position.name : false;
         
-        const stopLossPrice = heldStats.max15 * (1 - 0.085);
+        const stopLossPrice = heldStats.max15 * (1 - p.stopLossPct);
         const triggerStopLoss = heldStats.calcClose < stopLossPrice;
         
         let triggerTakeProfit = false;
         let takeProfitReason = '';
         if (takeProfitStrategy === 'daily_surge') {
-          triggerTakeProfit = (heldStats.close / heldStats.prevClose - 1) > 0.05;
-          takeProfitReason = '触发止盈(当日收盘涨幅>5%)';
+          triggerTakeProfit = (heldStats.close / heldStats.prevClose - 1) > p.takeProfitPct;
+          takeProfitReason = `触发止盈(当日收盘涨幅>${(p.takeProfitPct*100).toFixed(1)}%)`;
         } else {
-          triggerTakeProfit = heldStats.takeProfit > 0.05;
-          takeProfitReason = '触发止盈(现价较近3日高点涨幅>5%)';
+          triggerTakeProfit = heldStats.takeProfit > p.takeProfitPct;
+          takeProfitReason = `触发止盈(现价较近3日高点涨幅>${(p.takeProfitPct*100).toFixed(1)}%)`;
         }
 
         if (isNotTop1 || triggerStopLoss || triggerTakeProfit) {
@@ -393,7 +420,7 @@ export async function runBacktest(initialCapital: number, customEtfs?: any[], ta
     if (!position && topTradedEtf) {
       const bestToBuy = topTradedEtf;
       if (bestToBuy.name !== soldToday) {
-        if (bestToBuy.openRebound > 0.015) {
+        if (bestToBuy.openRebound > p.reboundPct) {
           const shares = capital / bestToBuy.close;
           position = { 
             name: bestToBuy.name, 
