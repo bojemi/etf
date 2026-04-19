@@ -384,7 +384,7 @@ export async function runBacktest(
             let reason = '';
 
             if (triggerStopLoss) {
-              reason = '触发止损(15日高点回撤<-8.5%)';
+              reason = `触发止损(${p.maxLong}日高点回撤<-${(p.stopLossPct * 100).toFixed(1)}%)`;
             } else if (triggerTakeProfit) {
               reason = takeProfitReason;
             } else {

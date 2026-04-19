@@ -77,6 +77,31 @@ export default function BacktestDashboard() {
   const [editingEtfs, setEditingEtfs] = useState<any[]>([]);
   const [takeProfitStrategy, setTakeProfitStrategy] = useState<'3day_high' | 'daily_surge'>('3day_high');
   const [editingTakeProfitStrategy, setEditingTakeProfitStrategy] = useState<'3day_high' | 'daily_surge'>('3day_high');
+  const [strategyType, setStrategyType] = useState<'conservative' | 'aggressive'>('conservative');
+
+  // 策略参数配置
+  const strategyParams = {
+    conservative: {
+      maFast: 3,
+      maSlow: 28,
+      minPeriod: 30,
+      maxShort: 3,
+      maxLong: 15,
+      stopLossPct: 0.085,
+      takeProfitPct: 0.05,
+      reboundPct: 0.015
+    },
+    aggressive: {
+      maFast: 3,
+      maSlow: 28,
+      minPeriod: 28,
+      maxShort: 8,
+      maxLong: 17,
+      stopLossPct: 0.08,
+      takeProfitPct: 0.04,
+      reboundPct: 0.01
+    }
+  };
 
   const fetchData = async (isBackground = false) => {
     if (isBackground) {
@@ -97,7 +122,7 @@ export default function BacktestDashboard() {
       }
       setSyncProgress(null);
 
-      const result = await runBacktest(parseFloat(initialCapital), etfPool, takeProfitStrategy);
+      const result = await runBacktest(parseFloat(initialCapital), etfPool, takeProfitStrategy, strategyParams[strategyType]);
       setData(result);
     } catch (err: any) {
       setError(err.message);
@@ -117,7 +142,7 @@ export default function BacktestDashboard() {
 
   useEffect(() => {
     fetchData(false);
-  }, [etfPool, takeProfitStrategy]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [etfPool, takeProfitStrategy, strategyType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading || syncProgress) {
     return (
@@ -217,15 +242,18 @@ export default function BacktestDashboard() {
     if (currentPosition) {
       const heldStat = data.latestStats.find((s: any) => s.name === currentPosition);
       if (heldStat) {
-        const currentVsMax15 = heldStat.calcClose / heldStat.max15 - 1;
+        const currentVsMaxLong = heldStat.calcClose / heldStat.max15 - 1;
         const takeProfitCond = heldStat.takeProfit;
         
         let triggerSell = false;
         let sellReason = "";
-        if (currentVsMax15 < -0.085) {
+        
+        const params = strategyParams[strategyType];
+        
+        if (currentVsMaxLong < -params.stopLossPct) {
           triggerSell = true;
           sellReason = "触发止损";
-        } else if (takeProfitCond > 0.05) {
+        } else if (takeProfitCond > params.takeProfitPct) {
           triggerSell = true;
           sellReason = "触发止盈";
         } else if (top1.name !== currentPosition) {
@@ -234,7 +262,7 @@ export default function BacktestDashboard() {
         }
         
         if (triggerSell) {
-          if (top1.name !== currentPosition && top1.isTraded && top1.openRebound > 0.015) {
+          if (top1.name !== currentPosition && top1.isTraded && top1.openRebound > params.reboundPct) {
             plan = `卖出 ${currentPosition} (${sellReason})，买入 ${top1.name}`;
           } else {
             plan = `卖出 ${currentPosition} (${sellReason})，空仓观望`;
@@ -244,7 +272,8 @@ export default function BacktestDashboard() {
         }
       }
     } else {
-      if (top1 && top1.isTraded && top1.openRebound > 0.015) {
+      const params = strategyParams[strategyType];
+      if (top1 && top1.isTraded && top1.openRebound > params.reboundPct) {
         plan = `买入 ${top1.name}`;
       } else {
         plan = "空仓观望";
@@ -266,6 +295,30 @@ export default function BacktestDashboard() {
               QUANT-ARCHITECT-OS
             </h1>
             <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-1 bg-neutral-900 rounded-lg border border-neutral-800 p-1">
+                <button
+                  onClick={() => setStrategyType('conservative')}
+                  className={cn(
+                    "px-4 py-2 text-sm font-medium transition-colors rounded-md",
+                    strategyType === 'conservative'
+                      ? "bg-emerald-600 text-white"
+                      : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800"
+                  )}
+                >
+                  保守策略
+                </button>
+                <button
+                  onClick={() => setStrategyType('aggressive')}
+                  className={cn(
+                    "px-4 py-2 text-sm font-medium transition-colors rounded-md",
+                    strategyType === 'aggressive'
+                      ? "bg-emerald-600 text-white"
+                      : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800"
+                  )}
+                >
+                  激进策略
+                </button>
+              </div>
               <button
                 onClick={() => {
                   loadCacheInfo();
@@ -275,24 +328,6 @@ export default function BacktestDashboard() {
               >
                 <Calendar className="w-4 h-4" />
                 本地数据缓存
-              </button>
-              <button
-                onClick={() => setShowInstructions(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-neutral-300 rounded-lg border border-neutral-800 transition-colors text-sm font-medium"
-              >
-                <Shield className="w-4 h-4" />
-                策略说明
-              </button>
-              <button
-                onClick={() => {
-                  setEditingEtfs([...etfPool]);
-                  setEditingTakeProfitStrategy(takeProfitStrategy);
-                  setShowEtfSettings(true);
-                }}
-                className="flex items-center gap-2 px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-neutral-300 rounded-lg border border-neutral-800 transition-colors text-sm font-medium"
-              >
-                <Settings className="w-4 h-4" />
-                自定义标的池
               </button>
               <button
                 onClick={() => fetchData(true)}
@@ -378,7 +413,7 @@ export default function BacktestDashboard() {
                   onClick={() => setShowInstructions(!showInstructions)}
                   className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
                 >
-                  查看说明
+                  策略说明
                 </button>
                 <div className="bg-neutral-800 border border-neutral-700 px-4 py-2 rounded-md text-sm font-mono text-neutral-300">
                   数据更新时间: {nowStr}, 14:30调仓计划: <span className="text-blue-400 font-bold">{plan}</span>
@@ -449,26 +484,73 @@ export default function BacktestDashboard() {
 
                 <div className="pt-4 border-t border-neutral-800">
                   <h3 className="text-base font-semibold text-neutral-100 mb-4">指标计算公式</h3>
-                  <div className="space-y-4">
-                    <div className="space-y-1">
+                  <div className="space-y-6">
+                    <div className="space-y-2">
                       <p><strong className="text-emerald-400">1. 均线动量涨幅</strong></p>
-                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">MA(3) / MA(28) - 1</p>
-                      <p className="text-xs text-neutral-400">MA(3) 包含 T 日、T-1 日、T-2 日的收盘价平均；MA(28) 包含 T 日到 T-27 日的收盘价平均。用于衡量标的近期的强势程度，排名第 1 的标的为候选买入对象。</p>
+                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">MA(maFast) / MA(maSlow) - 1</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="bg-neutral-900 border border-neutral-800 p-3 rounded-lg">
+                          <h5 className="text-blue-400 font-medium text-xs mb-2">保守策略</h5>
+                          <p className="text-xs text-neutral-400">maFast = 3, maSlow = 28</p>
+                          <p className="text-xs text-neutral-500 mt-1">MA(3) 包含 T 日、T-1 日、T-2 日的收盘价平均；MA(28) 包含 T 日到 T-27 日的收盘价平均。</p>
+                        </div>
+                        <div className="bg-neutral-900 border border-neutral-800 p-3 rounded-lg">
+                          <h5 className="text-emerald-400 font-medium text-xs mb-2">激进策略</h5>
+                          <p className="text-xs text-neutral-400">maFast = 3, maSlow = 28</p>
+                          <p className="text-xs text-neutral-500 mt-1">与保守策略相同</p>
+                        </div>
+                      </div>
                     </div>
-                    <div className="space-y-1">
+                    
+                    <div className="space-y-2">
                       <p><strong className="text-emerald-400">2. 开仓涨幅</strong></p>
-                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / 过去30个交易日的最低收盘价 - 1</p>
-                      <p className="text-xs text-neutral-400">寻找过去 30 天（不包含 T 日）的最低价。只有当开仓涨幅 &gt; 1.5% 时，才允许开仓买入，用于过滤掉长期阴跌的标的。</p>
+                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / 过去minPeriod个交易日的最低收盘价 - 1</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="bg-neutral-900 border border-neutral-800 p-3 rounded-lg">
+                          <h5 className="text-blue-400 font-medium text-xs mb-2">保守策略</h5>
+                          <p className="text-xs text-neutral-400">minPeriod = 30, 开仓涨幅阈值 = 1.5%</p>
+                          <p className="text-xs text-neutral-500 mt-1">寻找过去 30 天（不包含 T 日）的最低价。只有当开仓涨幅 &gt; 1.5% 时，才允许开仓买入。</p>
+                        </div>
+                        <div className="bg-neutral-900 border border-neutral-800 p-3 rounded-lg">
+                          <h5 className="text-emerald-400 font-medium text-xs mb-2">激进策略</h5>
+                          <p className="text-xs text-neutral-400">minPeriod = 28, 开仓涨幅阈值 = 1.0%</p>
+                          <p className="text-xs text-neutral-500 mt-1">寻找过去 28 天（不包含 T 日）的最低价。只有当开仓涨幅 &gt; 1.0% 时，才允许开仓买入。</p>
+                        </div>
+                      </div>
                     </div>
-                    <div className="space-y-1">
+                    
+                    <div className="space-y-2">
                       <p><strong className="text-emerald-400">3. 止损条件</strong></p>
-                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / 过去15个交易日的最高收盘价 - 1 &lt; -8.5%</p>
-                      <p className="text-xs text-neutral-400">寻找过去 15 天（不包含 T 日）的最高价。如果现价距离近 15 日高点回撤超过 8.5%，则无条件止损卖出。</p>
+                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / 过去maxLong个交易日的最高收盘价 - 1 &lt; -stopLossPct</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="bg-neutral-900 border border-neutral-800 p-3 rounded-lg">
+                          <h5 className="text-blue-400 font-medium text-xs mb-2">保守策略</h5>
+                          <p className="text-xs text-neutral-400">maxLong = 15, stopLossPct = 8.5%</p>
+                          <p className="text-xs text-neutral-500 mt-1">寻找过去 15 天（不包含 T 日）的最高价。如果现价距离近 15 日高点回撤超过 8.5%，则无条件止损卖出。</p>
+                        </div>
+                        <div className="bg-neutral-900 border border-neutral-800 p-3 rounded-lg">
+                          <h5 className="text-emerald-400 font-medium text-xs mb-2">激进策略</h5>
+                          <p className="text-xs text-neutral-400">maxLong = 17, stopLossPct = 8.0%</p>
+                          <p className="text-xs text-neutral-500 mt-1">寻找过去 17 天（不包含 T 日）的最高价。如果现价距离近 17 日高点回撤超过 8.0%，则无条件止损卖出。</p>
+                        </div>
+                      </div>
                     </div>
-                    <div className="space-y-1">
+                    
+                    <div className="space-y-2">
                       <p><strong className="text-emerald-400">4. 止盈条件</strong></p>
-                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / 过去3个交易日的最高收盘价 - 1 &gt; 5%</p>
-                      <p className="text-xs text-neutral-400">寻找过去 3 天（不包含 T 日）的最高价。如果现价突破近 3 日高点超过 5%，说明情绪高潮，直接止盈卖出。</p>
+                      <p className="font-mono text-xs bg-neutral-900 p-2 rounded">T日收盘价 / 过去maxShort个交易日的最高收盘价 - 1 &gt; takeProfitPct</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="bg-neutral-900 border border-neutral-800 p-3 rounded-lg">
+                          <h5 className="text-blue-400 font-medium text-xs mb-2">保守策略</h5>
+                          <p className="text-xs text-neutral-400">maxShort = 3, takeProfitPct = 5.0%</p>
+                          <p className="text-xs text-neutral-500 mt-1">寻找过去 3 天（不包含 T 日）的最高价。如果现价突破近 3 日高点超过 5.0%，说明情绪高潮，直接止盈卖出。</p>
+                        </div>
+                        <div className="bg-neutral-900 border border-neutral-800 p-3 rounded-lg">
+                          <h5 className="text-emerald-400 font-medium text-xs mb-2">激进策略</h5>
+                          <p className="text-xs text-neutral-400">maxShort = 8, takeProfitPct = 4.0%</p>
+                          <p className="text-xs text-neutral-500 mt-1">寻找过去 8 天（不包含 T 日）的最高价。如果现价突破近 8 日高点超过 4.0%，说明情绪高潮，直接止盈卖出。</p>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
